@@ -1,4 +1,9 @@
-import { useState, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
+import { BlendService } from '../services/blendService';
+import { blendConfig } from '../config/blend';
+import { PoolEstimate, PositionsEstimate } from '@blend-capital/blend-sdk';
+import { useWalletStore } from '../services/walletService';
+import toast from 'react-hot-toast';
 import { Tab } from '@headlessui/react';
 import { ArrowTrendingUpIcon, ShieldCheckIcon, BellAlertIcon } from '@heroicons/react/24/outline';
 
@@ -27,12 +32,26 @@ interface PositionMakerProps {
   isWalletConnected: boolean;
 }
 
-export default function PositionMaker({
+interface PoolEstimateData {
+    tvl: number;
+    totalBorrowed: number;
+    utilization: number;
+    apr: number;
+}
+
+interface PositionsEstimateData {
+    totalSupplied: number;
+    totalBorrowed: number;
+    borrowLimit: number;
+    netApr: number;
+}
+
+export const PositionMaker: React.FC<PositionMakerProps> = ({
   onConnectWallet,
   onCreatePosition,
   onMovePosition,
   isWalletConnected,
-}: PositionMakerProps) {
+}) => {
   const [selectedTab, setSelectedTab] = useState(0);
   const [pools, setPools] = useState<PoolData[]>([]);
   const [positions, setPositions] = useState<Position[]>([]);
@@ -40,25 +59,48 @@ export default function PositionMaker({
   const [amount, setAmount] = useState<string>('');
   const [isLoading, setIsLoading] = useState(false);
   const [alerts, setAlerts] = useState<{ type: string; message: string }[]>([]);
+  const [blendService] = useState(() => new BlendService(blendConfig));
+  const [poolEstimate, setPoolEstimate] = useState<PoolEstimateData | null>(null);
+  const [userPositions, setUserPositions] = useState<PositionsEstimateData | null>(null);
+  const { address } = useWalletStore();
 
-  // Fetch pools data
   useEffect(() => {
-    const fetchPools = async () => {
-      try {
-        // TODO: Replace with actual Blend API call
-        const mockPools: PoolData[] = [
-          { id: '1', name: 'BTC-ETH Pool', apy: 12.5, risk: 0.3, utilization: 0.65, totalValue: 1000000 },
-          { id: '2', name: 'ETH-XLM Pool', apy: 15.2, risk: 0.4, utilization: 0.75, totalValue: 800000 },
-          { id: '3', name: 'BTC-XLM Pool', apy: 10.8, risk: 0.25, utilization: 0.55, totalValue: 1200000 },
-        ];
-        setPools(mockPools);
-      } catch (error) {
-        console.error('Failed to fetch pools:', error);
-      }
-    };
-
-    fetchPools();
+    loadPoolData();
   }, []);
+
+  useEffect(() => {
+    if (address) {
+      loadUserPositions();
+    }
+  }, [address]);
+
+  const loadPoolData = async () => {
+    try {
+      setIsLoading(true);
+      const poolData = await blendService.getPools();
+      setPoolEstimate(poolData as unknown as PoolEstimateData);
+    } catch (error) {
+      console.error('Error loading pool data:', error);
+      toast.error('Failed to load pool data');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const loadUserPositions = async () => {
+    if (!address) return;
+    
+    try {
+      setIsLoading(true);
+      const positions = await blendService.getUserPositions(address);
+      setUserPositions(positions as unknown as PositionsEstimateData);
+    } catch (error) {
+      console.error('Error loading user positions:', error);
+      toast.error('Failed to load user positions');
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   const handleCreatePosition = async () => {
     if (!selectedPool || !amount || isNaN(Number(amount))) return;
@@ -75,6 +117,14 @@ export default function PositionMaker({
       setIsLoading(false);
     }
   };
+
+  if (isLoading) {
+    return (
+      <div className="flex justify-center items-center min-h-[200px]">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-4xl mx-auto p-6">
@@ -251,6 +301,64 @@ export default function PositionMaker({
           </Tab.Panels>
         </Tab.Group>
       )}
+
+      {address && (
+        <div className="space-y-6 mt-6">
+          <div className="bg-white rounded-lg shadow p-6">
+            <h2 className="text-xl font-bold mb-4">Pool Information</h2>
+            {poolEstimate ? (
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <p className="text-gray-600">Total Value Locked</p>
+                  <p className="font-medium">{poolEstimate.tvl} XLM</p>
+                </div>
+                <div>
+                  <p className="text-gray-600">Total Borrowed</p>
+                  <p className="font-medium">{poolEstimate.totalBorrowed} XLM</p>
+                </div>
+                <div>
+                  <p className="text-gray-600">Utilization Rate</p>
+                  <p className="font-medium">{poolEstimate.utilization}%</p>
+                </div>
+                <div>
+                  <p className="text-gray-600">APR</p>
+                  <p className="font-medium">{poolEstimate.apr}%</p>
+                </div>
+              </div>
+            ) : (
+              <p className="text-gray-500">No pool data available</p>
+            )}
+          </div>
+
+          <div className="bg-white rounded-lg shadow p-6">
+            <h2 className="text-xl font-bold mb-4">Your Positions</h2>
+            {userPositions ? (
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <p className="text-gray-600">Total Supplied</p>
+                    <p className="font-medium">{userPositions.totalSupplied} XLM</p>
+                  </div>
+                  <div>
+                    <p className="text-gray-600">Total Borrowed</p>
+                    <p className="font-medium">{userPositions.totalBorrowed} XLM</p>
+                  </div>
+                  <div>
+                    <p className="text-gray-600">Borrow Limit</p>
+                    <p className="font-medium">{userPositions.borrowLimit} XLM</p>
+                  </div>
+                  <div>
+                    <p className="text-gray-600">Net APR</p>
+                    <p className="font-medium">{userPositions.netApr}%</p>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <p className="text-gray-500">No positions found</p>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
-} 
+}; 
